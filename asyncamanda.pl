@@ -21,7 +21,7 @@
 # Contributions are welcomed!
 #
 
-our $VERSION = 0.1;
+our $VERSION = "0.2";
 
 use lib '/usr/lib/amanda/perl';
 use strict;
@@ -31,17 +31,16 @@ use Getopt::Long;
 
 use FileHandle;
 
-use Amanda::Config;
-use Amanda::Cmdline;
-
 use Net::OpenSSH;
+
+use Time::ParseDate;
 
 sub usage {
     print <<EOF;
     USAGE: asyncamanda -i|--interval <interval value> -h|--host <[user@]host[:port]> [-k|--key <private_key_path>] -c|--command <command> -a|--amandates <amandates path>
 	asyncamanda will check when the last amanda backup was performed, from the information available in the amandates file, and connect to the server and start a backup run if last backup was before the maximum interval.
 	Arguments:
-	    -i <interval value>                - the backup interval in hours
+	    -i <interval value>                - the minimum interval between backup runs. I.e. "1 day", "1 week", "4 days"
 	    -h <[user[:password]@]host[:port]> - Host and user that runs the amanda backup (amdump) command
 	    -k <private_key_path>  (optional)  - private key used to authenticate. i.e. \$HOME/.ssh/id_rsa
 	    -c <command>                       - full line of the amdump command on the server. I.e. "/usr/sbin/amdump daily"
@@ -53,7 +52,7 @@ EOF
 my $exit_code = 0;
 
 # treating command line options
-my $interval = '';
+my $raw_interval = '';
 my $host = '';
 my $key = '';
 my $command = '';
@@ -61,7 +60,7 @@ my $amandates = '';
 
 Getopt::Long::Configure(qw(auto_version));
 GetOptions (
-    'interval|i=i' => \$interval,
+    'interval|i=s' => \$raw_interval,
     'host|h=s' => \$host,
     'key|k=s' => \$key,
     'command|c=s' => \$command,
@@ -69,7 +68,15 @@ GetOptions (
 ) or usage();
 
 # If some of the option is missing, just show usage and quit
-usage() if (@ARGV > 0 || !$interval || !$host || !$command || !$amandates);
+usage() if (@ARGV > 0 || !$raw_interval || !$host || !$command || !$amandates);
+
+my $interval_tmp='';
+$interval_tmp = parsedate($raw_interval); # parsedate will sum the value with time() and store the result. This is not what we want, so extract the interval from it.
+my $interval = '';
+$interval = $interval_tmp - time();
+
+#print "\nInterval: $raw_interval, $interval\n";
+
 
 open (AMANDATES, $amandates) or die "ERROR: Could not open $amandates. $!";
 
@@ -94,11 +101,8 @@ while (<AMANDATES>) {
 }
 close(AMANDATES);
 
-# convert interval in hours to seconds
-my $interval_sec = $interval * 60 * 60;
-
 # if the most recent backup is older than the interval, make a backup run
-if ((time() - $most_recent) > $interval_sec) {
+if ((time() - $most_recent) > $interval) {
     my $ssh = '';
     # execute the backup
     if (!$key){ # no key path was given as option
